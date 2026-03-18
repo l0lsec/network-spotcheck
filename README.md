@@ -2,6 +2,8 @@
 
 A macOS/Linux command-line tool that inventories every active network connection on your machine and checks each remote IP against real threat intelligence — no IP is assumed safe just because it belongs to a known cloud provider.
 
+**[Documentation site (GitHub Pages)](https://slouissaint.github.io/network-spotcheck/)** — enable in repo Settings → Pages, source: branch `main`, folder `/docs`.
+
 ## Why
 
 Malicious infrastructure routinely lives on AWS, Azure, GCP, and behind Cloudflare. Knowing the *provider* tells you nothing about whether the traffic is legitimate. This tool queries every IP against actual reputation databases so you get a real answer.
@@ -11,9 +13,10 @@ Malicious infrastructure routinely lives on AWS, Azure, GCP, and behind Cloudfla
 1. **Captures all established connections** via `lsof` — process name, PID, remote IP, port.
 2. **Flags non-standard ports** — anything outside 443, 80, 53, etc.
 3. **Resolves reverse DNS** for every remote IP.
-4. **Queries threat intelligence APIs** — VirusTotal and AbuseIPDB — for each IP.
-5. **Flags IPs** with non-zero malicious/abuse scores.
-6. **Tracks sessions** so you can spread a large scan across multiple days without re-checking IPs.
+4. **Skips expected traffic** via a configurable allowlist of process+domain pairs, saving API quota for IPs that actually need investigation.
+5. **Queries threat intelligence APIs** — VirusTotal and AbuseIPDB — for each remaining IP.
+6. **Flags IPs** with non-zero malicious/abuse scores.
+7. **Tracks sessions** so you can spread a large scan across multiple days without re-checking IPs.
 
 ## Requirements
 
@@ -54,7 +57,46 @@ export ABUSEIPDB_API_KEY="your_key_here"
 | `--mode premium` | No rate limiting. Uses your VT premium license at full speed. |
 | `--mode passive` | No API calls at all. Collects connections, reverse DNS, and port analysis only. |
 
-### Session & Resume
+### Allowlist (saving API quota)
+
+The scanner ships with `allowlist.conf` — a set of rules that match **process name + reverse DNS domain** pairs. When both match, the IP is marked `expected` and no API call is made. This conserves your VT free-tier quota for the IPs that actually warrant investigation.
+
+**Safety rules (always enforced, not configurable):**
+- IPs with **no reverse DNS** (`no PTR`) are **never** skipped — you cannot verify what you cannot resolve.
+- Connections on **non-standard ports** are **never** skipped.
+- **Both** the process name and the rDNS domain must match a rule — one alone is not enough.
+
+Example rules from `allowlist.conf`:
+
+```
+# Chrome talking to Google's own infrastructure
+Google          | *.1e100.net
+Google          | *.google.com
+
+# Cursor IDE talking to its AWS backend
+Cursor          | *.amazonaws.com
+Cursor          | *.awsglobalaccelerator.com
+
+# Keybase to its AWS servers
+keybase         | *.amazonaws.com
+```
+
+If Chrome (`Google`) connects to a random EC2 instance instead of `*.1e100.net`, it **will not match** the allowlist and gets the full threat intel treatment.
+
+```bash
+# View active rules
+./network_spotcheck.sh --show-allowlist
+
+# Disable the allowlist entirely (check every IP)
+./network_spotcheck.sh --no-allowlist
+
+# Use a custom allowlist file
+./network_spotcheck.sh --allowlist /path/to/my_rules.conf
+```
+
+You can also point to a custom file via the `SPOTCHECK_ALLOWLIST` environment variable.
+
+### Session and Resume
 
 Every run creates a session that persists your progress to `~/.spotcheck_sessions/`. If the scan is interrupted (Ctrl+C, quota exhaustion, etc.), pick up exactly where you left off:
 
@@ -114,17 +156,24 @@ Run the maximum 500 VT lookups per day until every IP is checked:
 # Repeat until session shows [complete]
 ```
 
+With the allowlist active, expected traffic (Chrome to Google, Teams to Microsoft, etc.) is automatically skipped, so your 500 daily VT lookups are spent entirely on IPs that actually need checking.
+
 ## Output
 
 The tool prints a live table to the terminal and saves a full report to `/tmp/network_spotcheck_*.txt`.
 
 ```
-  #    IP                 REVERSE DNS                       PROCS     ABUSEIPDB            VIRUSTOTAL
-  -    --                 -----------                       -----     ---------            ----------
-  1    104.18.18.125      (no PTR)                          Cursor    0%|0 reports         0m/0s/73h
-  2    54.205.168.143     ec2-54-205-168-143.amazonaws.com  Cursor    12%|3 reports        2m/1s/68h      [FLAGGED]
+  #    IP                 REVERSE DNS                                PROCS     ABUSEIPDB         VIRUSTOTAL
+  -    --                 -----------                                -----     ---------         ----------
+  1    142.250.189.136    ncorda-as-in-f8.1e100.net                  Google    expected          expected
+  2    104.18.18.125      (no PTR)                                   Cursor    0%|0 reports      0m/0s/73h
+  3    54.205.168.143     ec2-54-205-168-143.amazonaws.com           Cursor    12%|3 reports     2m/1s/68h      [FLAGGED]
+  4    67.137.57.20       (no PTR)                                   Citrix    0%|0 reports      0m/0s/71h
   ...
 ```
+
+- `expected` — matched the allowlist; API call skipped
+- `[FLAGGED]` — non-zero malicious or abuse score from threat intel
 
 When a session finishes, a merged summary of all results is printed, with a dedicated section for any flagged IPs.
 
@@ -132,6 +181,7 @@ When a session finishes, a merged summary of all results is printed, with a dedi
 
 | Path | Purpose |
 |------|---------|
+| `allowlist.conf` | Process+domain allowlist rules (ships with the tool) |
 | `~/.spotcheck_sessions/` | Session data (IP lists, results, metadata) |
 | `~/.vt_quota` | Persistent VT free-tier quota tracker |
 | `/tmp/network_spotcheck_*.txt` | Per-run text reports |

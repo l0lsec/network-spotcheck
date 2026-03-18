@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Network Spotcheck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #3fb950;
+      --warn: #d29922;
+      --danger: #f85149;
+      --border: #30363d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      font-size: 18px;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    h1, h2, h3 {
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    h1 {
+      font-size: 1.85rem;
+      margin: 0 0 0.5rem;
+      color: var(--text);
+    }
+
+    .tagline {
+      font-size: 1.05rem;
+      color: var(--muted);
+      margin: 0 0 2.5rem;
+    }
+
+    h2 {
+      font-size: 1.15rem;
+      margin: 2.25rem 0 0.75rem;
+      color: var(--accent);
+    }
+
+    h3 {
+      font-size: 1rem;
+      margin: 1.5rem 0 0.5rem;
+      color: var(--text);
+    }
+
+    p {
+      margin: 0 0 1rem;
+      color: var(--text);
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .lead {
+      font-size: 1.1rem;
+      color: var(--muted);
+    }
+
+    pre, code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.9rem;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+
+    code {
+      background: var(--surface);
+      padding: 0.15em 0.45em;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+
+    pre code {
+      padding: 0;
+      background: none;
+    }
+
+    ul {
+      margin: 0 0 1rem;
+      padding-left: 1.35rem;
+    }
+    li {
+      margin: 0.25rem 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .cta {
+      display: inline-block;
+      margin-top: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: var(--bg);
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 600;
+      font-size: 0.9rem;
+      border-radius: 6px;
+    }
+    .cta:hover {
+      filter: brightness(1.1);
+      text-decoration: none;
+    }
+
+    .badge {
+      display: inline-block;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.75rem;
+      padding: 0.2em 0.5em;
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--muted);
+      margin-right: 0.35rem;
+    }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2rem 0;
+    }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Network Spotcheck</h1>
+    <p class="tagline">CLI threat intel for every connection. Bash + Python.</p>
+    <p class="lead">
+      Inventories every active network connection on your machine and checks each remote IP against real threat intelligence. No IP is assumed safe just because it belongs to a known cloud provider.
+    </p>
+    <a href="https://github.com/slouissaint/network-spotcheck" class="cta">View on GitHub</a>
+
+    <h2>Why</h2>
+    <p>
+      Malicious infrastructure routinely lives on AWS, Azure, GCP, and behind Cloudflare. Knowing the provider tells you nothing about whether the traffic is legitimate. This tool queries every IP against actual reputation databases so you get a real answer.
+    </p>
+
+    <h2>What it does</h2>
+    <ul>
+      <li><strong>Captures</strong> all established connections via <code>lsof</code> — process, PID, remote IP, port.</li>
+      <li><strong>Flags</strong> non-standard ports (outside 443, 80, 53, etc.).</li>
+      <li><strong>Resolves</strong> reverse DNS for every remote IP.</li>
+      <li><strong>Allowlist</strong> — skips API calls for expected process+domain pairs to save quota.</li>
+      <li><strong>Queries</strong> VirusTotal and AbuseIPDB for each remaining IP.</li>
+      <li><strong>Flags</strong> IPs with non-zero malicious/abuse scores.</li>
+      <li><strong>Sessions</strong> — resume interrupted scans; spread large runs across days.</li>
+    </ul>
+
+    <h2>Install</h2>
+    <pre><code>git clone https://github.com/slouissaint/network-spotcheck.git
+cd network-spotcheck
+chmod +x network_spotcheck.sh   # or: pip install -r requirements.txt && chmod +x network_spotcheck.py</code></pre>
+    <p>
+      Optional: set <code>VIRUSTOTAL_API_KEY</code> and <code>ABUSEIPDB_API_KEY</code> for live lookups. Without keys, the tool still collects connections, reverse DNS, and port analysis.
+    </p>
+
+    <h2>Usage</h2>
+    <p>Bash or Python — same options:</p>
+    <pre><code>./network_spotcheck.sh [OPTIONS]
+./network_spotcheck.py [OPTIONS]</code></pre>
+
+    <h3>Modes</h3>
+    <table>
+      <thead>
+        <tr><th>Flag</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--mode free</code></td><td>Default. VT free-tier: 4 req/min, 500/day, 15.5K/month.</td></tr>
+        <tr><td><code>--mode premium</code></td><td>No rate limit (VT premium).</td></tr>
+        <tr><td><code>--mode passive</code></td><td>No API calls — collect + reverse DNS only.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Session &amp; resume</h3>
+    <pre><code>./network_spotcheck.sh --session my_audit
+# ... interrupt or quota runs out ...
+./network_spotcheck.sh --resume
+./network_spotcheck.sh --sessions   # list all</code></pre>
+
+    <h3>Other options</h3>
+    <p>
+      <code>--show-allowlist</code> · <code>--no-allowlist</code> · <code>--allowlist FILE</code> · <code>--vt-only</code> · <code>--abuse-only</code> · <code>--quota</code> · <code>--reset-quota</code>
+    </p>
+
+    <h2>Output</h2>
+    <p>Live table in the terminal + full report in <code>/tmp/network_spotcheck_*.txt</code>.</p>
+    <pre><code>  #    IP                 REVERSE DNS                    PROCS     ABUSEIPDB         VIRUSTOTAL
+  1    142.250.189.136    ncorda-as-in-f8.1e100.net      Google    expected          expected
+  2    104.18.18.125      (no PTR)                       Cursor    0%|0 reports      0m/0s/73h
+  3    54.205.168.143     ec2-54-205-168-143.amazonaws.com Cursor   12%|3 reports     2m/1s/68h  [FLAGGED]</code></pre>
+
+    <hr />
+    <footer>
+      <span class="badge">macOS / Linux</span>
+      <span class="badge">Bash</span>
+      <span class="badge">Python 3</span>
+      &nbsp;·&nbsp; MIT
+    </footer>
+  </div>
+</body>
+</html>

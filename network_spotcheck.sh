@@ -16,6 +16,9 @@
 #   --resume <name>   Resume a specific named session
 #   --session <name>  Tag this run with a name (default: timestamp)
 #   --sessions        List all saved sessions and exit
+#   --no-allowlist    Skip the allowlist; check every IP regardless
+#   --show-allowlist  Print the active allowlist rules and exit
+#   --allowlist FILE  Use a custom allowlist file
 #   --vt-only         Only run VirusTotal (skip AbuseIPDB)
 #   --abuse-only      Only run AbuseIPDB (skip VirusTotal)
 #   --quota           Show remaining VT quota and exit
@@ -58,13 +61,18 @@ DO_RESUME=0
 MODE="free"
 SKIP_VT=0
 SKIP_ABUSE=0
+USE_ALLOWLIST=1
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ALLOWLIST_FILE="${SPOTCHECK_ALLOWLIST:-$SCRIPT_DIR/allowlist.conf}"
 
 # =============================================================================
 # Quota tracker
 # =============================================================================
 
 init_quota_file() {
-  [[ ! -f "$VT_QUOTA_FILE" ]] && echo "0|0|$(date +%j)|$(date +%m)" > "$VT_QUOTA_FILE"
+  if [[ ! -f "$VT_QUOTA_FILE" ]]; then
+    echo "0|0|$(date +%j)|$(date +%m)" > "$VT_QUOTA_FILE"
+  fi
 }
 
 read_quota() {
@@ -143,7 +151,7 @@ list_sessions() {
     total=$(wc -l < "$sdir/ips.txt" 2>/dev/null | tr -d ' ')
     checked=$(wc -l < "$sdir/results.jsonl" 2>/dev/null | tr -d ' ')
     local color="$GRN"
-    [[ "$status" != "complete" ]] && color="$YLW"
+    [[ "$status" != "complete" ]] && color="$YLW" || true
     printf "  %-30s %b%-12s${RST}  %s/%s IPs checked\n" "$sname" "$color" "[$status]" "$checked" "$total"
   done
   if [[ "$found" -eq 0 ]]; then
@@ -219,7 +227,7 @@ mark_session_quota_paused() {
 
 print_session_results() {
   local sdir="$1"
-  [[ ! -f "$sdir/results.jsonl" ]] && return
+  if [[ ! -f "$sdir/results.jsonl" ]]; then return; fi
   echo ""
   printf "  ${BLD}%-18s %-42s %-14s %-20s %-18s${RST}\n" \
     "IP" "REVERSE DNS" "PROCS" "ABUSEIPDB" "VIRUSTOTAL" | tee -a "$REPORT_FILE"
@@ -234,10 +242,86 @@ print_session_results() {
     vt=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin)['vt'])" 2>/dev/null)
     flag=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin)['flag'])" 2>/dev/null)
     local flag_display=""
-    [[ -n "$flag" ]] && flag_display="${RED}${flag}${RST}"
-    printf "  %-18s %-42s %-14s %-20s %-18s %b\n" \
-      "$ip" "$rdns" "$procs" "$abuse" "$vt" "$flag_display" | tee -a "$REPORT_FILE"
+    [[ -n "$flag" ]] && flag_display="${RED}${flag}${RST}" || true
+    local abuse_display="$abuse" vt_display="$vt"
+    [[ "$abuse" == "expected" ]] && abuse_display="${DIM}expected${RST}" || true
+    [[ "$vt" == "expected" ]] && vt_display="${DIM}expected${RST}" || true
+    printf "  %-18s %-42s %-14s %-20b %-18b %b\n" \
+      "$ip" "$rdns" "$procs" "$abuse_display" "$vt_display" "$flag_display" | tee -a "$REPORT_FILE"
   done < "$sdir/results.jsonl"
+}
+
+# =============================================================================
+# Allowlist: skip API calls for expected process+rDNS pairings
+# =============================================================================
+
+ALLOWLIST_RULES=""
+
+load_allowlist() {
+  if [[ "$USE_ALLOWLIST" -eq 0 ]]; then return; fi
+  if [[ ! -f "$ALLOWLIST_FILE" ]]; then
+    return
+  fi
+  ALLOWLIST_RULES=$(grep -v '^\s*#' "$ALLOWLIST_FILE" | grep -v '^\s*$' | sed 's/[[:space:]]*|[[:space:]]*/|/')
+}
+
+show_allowlist() {
+  load_allowlist
+  echo ""
+  echo "  Allowlist: $ALLOWLIST_FILE"
+  echo "  ---------------------------"
+  if [[ -z "$ALLOWLIST_RULES" ]]; then
+    echo "  (empty or not found)"
+  else
+    echo ""
+    printf "  ${BLD}%-20s %s${RST}\n" "PROCESS" "RDNS PATTERN"
+    printf "  %-20s %s\n" "-------" "------------"
+    echo "$ALLOWLIST_RULES" | while IFS='|' read -r proc_pat rdns_pat; do
+      printf "  %-20s %s\n" "$proc_pat" "$rdns_pat"
+    done
+  fi
+  echo ""
+  echo "  Safety rules (always enforced):"
+  echo "    - IPs with no reverse DNS are NEVER skipped"
+  echo "    - Non-standard ports are NEVER skipped"
+  echo "    - Both process AND rDNS must match"
+  echo ""
+}
+
+# Glob match helper: match_glob "pattern" "string"
+match_glob() {
+  local pattern="$1" string="$2"
+  # Convert to lowercase for case-insensitive match
+  pattern=$(echo "$pattern" | tr '[:upper:]' '[:lower:]')
+  string=$(echo "$string" | tr '[:upper:]' '[:lower:]')
+  # Use bash extglob-style: [[ "$string" == $pattern ]]
+  eval "[[ \"$string\" == $pattern ]]" 2>/dev/null
+}
+
+# Returns 0 (true) if this IP should skip API lookups.
+# Requires: process name, rDNS result, port.
+is_expected_traffic() {
+  local proc="$1" rdns="$2" port="$3"
+  if [[ "$USE_ALLOWLIST" -eq 0 ]]; then return 1; fi
+
+  # Safety: never skip IPs with no rDNS
+  if [[ "$rdns" == "(no PTR)" ]]; then return 1; fi
+
+  # Safety: never skip non-standard ports
+  if ! is_standard_port "$port"; then
+    return 1
+  fi
+
+  if [[ -z "$ALLOWLIST_RULES" ]]; then return 1; fi
+
+  # Use process substitution to avoid subshell exit-status issues
+  while IFS='|' read -r proc_pat rdns_pat; do
+    [[ -z "$proc_pat" ]] && continue || true
+    if match_glob "$proc_pat" "$proc" && match_glob "$rdns_pat" "$rdns"; then
+      return 0
+    fi
+  done <<< "$ALLOWLIST_RULES"
+  return 1
 }
 
 # =============================================================================
@@ -260,6 +344,12 @@ while [[ $# -gt 0 ]]; do
       SESSION_NAME="$2"; shift 2 ;;
     --sessions)
       list_sessions; exit 0 ;;
+    --no-allowlist)
+      USE_ALLOWLIST=0; shift ;;
+    --show-allowlist)
+      load_allowlist; show_allowlist; exit 0 ;;
+    --allowlist)
+      ALLOWLIST_FILE="$2"; shift 2 ;;
     --vt-only)
       SKIP_ABUSE=1; shift ;;
     --abuse-only)
@@ -280,6 +370,8 @@ if [[ "$MODE" != "free" ]] && [[ "$MODE" != "premium" ]] && [[ "$MODE" != "passi
   echo "Invalid mode: $MODE (use: free, premium, passive)"; exit 1
 fi
 
+load_allowlist
+
 # =============================================================================
 # Core functions
 # =============================================================================
@@ -293,7 +385,7 @@ is_standard_port() {
 reverse_dns() {
   local ip="$1" result
   result=$(dig +short -x "$ip" 2>/dev/null | head -1 | sed 's/\.$//')
-  [[ -z "$result" ]] && result="(no PTR)"
+  [[ -z "$result" ]] && result="(no PTR)" || true
   echo "$result"
 }
 
@@ -463,6 +555,14 @@ else
   else
     echo -e "  VT:        ${DIM}disabled${RST}" | tee -a "$REPORT_FILE"
   fi
+  if [[ "$USE_ALLOWLIST" -eq 1 ]] && [[ -n "$ALLOWLIST_RULES" ]]; then
+    rule_count=$(echo "$ALLOWLIST_RULES" | wc -l | tr -d ' ')
+    echo -e "  Allowlist: ${GRN}${rule_count} rules${RST} (${ALLOWLIST_FILE})" | tee -a "$REPORT_FILE"
+  elif [[ "$USE_ALLOWLIST" -eq 0 ]]; then
+    echo -e "  Allowlist: ${YLW}disabled (--no-allowlist)${RST}" | tee -a "$REPORT_FILE"
+  else
+    echo -e "  Allowlist: ${DIM}none found${RST}" | tee -a "$REPORT_FILE"
+  fi
   echo "" | tee -a "$REPORT_FILE"
 
   # Collect
@@ -506,7 +606,7 @@ else
       nonstandard_found=1
     fi
   done <<< "$CONNECTIONS"
-  [[ $nonstandard_found -eq 0 ]] && echo "  All connections use standard ports (443, 80, 53, etc.)" | tee -a "$REPORT_FILE"
+  [[ $nonstandard_found -eq 0 ]] && echo "  All connections use standard ports (443, 80, 53, etc.)" | tee -a "$REPORT_FILE" || true
   echo "" | tee -a "$REPORT_FILE"
 fi
 
@@ -527,7 +627,7 @@ ip_idx=0
 checked_this_run=0
 
 while read -r ip; do
-  [[ -z "$ip" ]] && continue
+  [[ -z "$ip" ]] && continue || true
   ip_idx=$((ip_idx + 1))
 
   # Skip if already checked in this session
@@ -538,13 +638,38 @@ while read -r ip; do
   checked_this_run=$((checked_this_run + 1))
 
   procs=$(echo "$CONNECTIONS" | grep "|${ip}|" | cut -d'|' -f1 | sort -u | tr '\n' ',' | sed 's/,$//')
+  ports=$(echo "$CONNECTIONS" | grep "|${ip}|" | cut -d'|' -f4 | sort -u | tr '\n' ',' | sed 's/,$//')
   rdns=$(reverse_dns "$ip")
+
+  # --- Allowlist check ---
+  # Test each process+port combo; skip only if ALL connections to this IP match
+  skip_api=0
+  if [[ "$USE_ALLOWLIST" -eq 1 ]] && [[ -n "$ALLOWLIST_RULES" ]]; then
+    all_expected=1
+    while IFS='|' read -r conn_proc conn_pid conn_ip conn_port; do
+      if ! is_expected_traffic "$conn_proc" "$rdns" "$conn_port"; then
+        all_expected=0
+        break
+      fi
+    done <<< "$(echo "$CONNECTIONS" | grep "|${ip}|")"
+    [[ "$all_expected" -eq 1 ]] && skip_api=1 || true
+  fi
+
+  if [[ "$skip_api" -eq 1 ]]; then
+    abuse_result="expected"
+    vt_result="expected"
+    flag=""
+    save_ip_result "$SDIR" "$ip" "$rdns" "$procs" "$abuse_result" "$vt_result" "$flag"
+    printf "  %-4s %-18s %-42s %-14s %-20b %-18b %b\n" \
+      "$ip_idx" "$ip" "$rdns" "$procs" "${DIM}expected${RST}" "${DIM}expected${RST}" "" | tee -a "$REPORT_FILE"
+    continue
+  fi
 
   # --- AbuseIPDB ---
   abuse_result="--"
   if [[ "$MODE" != "passive" ]]; then
     abuse_result=$(check_abuseipdb "$ip")
-    [[ "$abuse_result" == "skip" ]] && abuse_result="--"
+    [[ "$abuse_result" == "skip" ]] && abuse_result="--" || true
   fi
 
   # --- VirusTotal ---
@@ -588,7 +713,7 @@ while read -r ip; do
         ;;
     esac
   fi
-  [[ "$vt_result" == "skip" ]] && vt_result="--"
+  [[ "$vt_result" == "skip" ]] && vt_result="--" || true
 
   # --- Flag logic ---
   flag=""
@@ -601,7 +726,7 @@ while read -r ip; do
   vt_plain=$(echo -e "$vt_result" | sed 's/\x1b\[[0-9;]*m//g')
   if [[ "$vt_plain" =~ ^([0-9]+)m/ ]]; then
     mal_num="${BASH_REMATCH[1]}"
-    [[ "$mal_num" -gt 0 ]] && flag="[FLAGGED]"
+    [[ "$mal_num" -gt 0 ]] && flag="[FLAGGED]" || true
   fi
 
   # Save to session
@@ -609,15 +734,15 @@ while read -r ip; do
 
   # Print live
   local_flag_display=""
-  [[ -n "$flag" ]] && local_flag_display="${RED}${flag}${RST}"
+  [[ -n "$flag" ]] && local_flag_display="${RED}${flag}${RST}" || true
   vt_display="$vt_result"
-  [[ "$vt_result" == "QUOTA_HIT" ]] && vt_display="${RED}QUOTA HIT${RST}"
-  [[ "$vt_result" == "quota_full" ]] && vt_display="${YLW}quota full${RST}"
+  [[ "$vt_result" == "QUOTA_HIT" ]] && vt_display="${RED}QUOTA HIT${RST}" || true
+  [[ "$vt_result" == "quota_full" ]] && vt_display="${YLW}quota full${RST}" || true
   printf "  %-4s %-18s %-42s %-14s %-20s %-18s %b\n" \
     "$ip_idx" "$ip" "$rdns" "$procs" "$abuse_result" "$vt_display" "$local_flag_display" | tee -a "$REPORT_FILE"
 
   # If quota paused, stop the loop
-  [[ "$vt_stopped" -eq 1 ]] && [[ "$MODE" == "free" ]] && break
+  [[ "$vt_stopped" -eq 1 ]] && [[ "$MODE" == "free" ]] && break || true
 
 done <<< "$UNIQUE_IPS"
 
@@ -635,6 +760,11 @@ if [[ "$total_checked" -ge "$IP_COUNT" ]]; then
 else
   echo -e "  ${YLW}Session progress: $total_checked / $IP_COUNT IPs checked.${RST}" | tee -a "$REPORT_FILE"
   echo -e "  ${CYN}Resume: ./network_spotcheck.sh --resume${RST}" | tee -a "$REPORT_FILE"
+fi
+
+expected_count=$(grep -c '"vt":"expected"' "$SDIR/results.jsonl" 2>/dev/null || true)
+if [[ "$expected_count" -gt 0 ]]; then
+  echo -e "  ${DIM}Allowlist: $expected_count IPs matched known process+domain rules (API calls saved)${RST}" | tee -a "$REPORT_FILE"
 fi
 
 if [[ "$MODE" == "free" ]] && [[ -n "$VT_KEY" ]] && [[ "$SKIP_VT" -eq 0 ]]; then
@@ -656,7 +786,7 @@ flagged_count=$(grep -c '"flag":"\[FLAGGED\]"' "$SDIR/results.jsonl" 2>/dev/null
 if [[ "$flagged_count" -gt 0 ]]; then
   echo -e "  ${RED}${BLD}$flagged_count IP(s) FLAGGED by threat intelligence:${RST}" | tee -a "$REPORT_FILE"
   grep '"flag":"\[FLAGGED\]"' "$SDIR/results.jsonl" | while IFS= read -r line; do
-    local fip fvt fabuse
+    fip=""; fvt=""; fabuse=""
     fip=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin)['ip'])" 2>/dev/null)
     fvt=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin)['vt'])" 2>/dev/null)
     fabuse=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin)['abuse'])" 2>/dev/null)
