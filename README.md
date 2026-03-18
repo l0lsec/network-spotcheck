@@ -2,7 +2,7 @@
 
 A macOS/Linux command-line tool that inventories every active network connection on your machine and checks each remote IP against real threat intelligence.
 
-**[Documentation site (GitHub Pages)](https://slouissaint.github.io/network-spotcheck/)** — enable in repo Settings → Pages, source: branch `main`, folder `/docs`.
+**[Documentation site (GitHub Pages)](https://slouissaint.github.io/network-spotcheck/)** 
 
 ## Why
 
